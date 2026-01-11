@@ -89,13 +89,17 @@ class SyncthingManager:
                 start_new_session=True
             )
 
-            # Wait for API to become available
+            # Wait for API to become available AND config file to be written
+            # On first run, Syncthing generates keys/certs which takes time
             start_time = time.time()
             while time.time() - start_time < timeout:
                 if self.is_running():
-                    # Give it a moment to fully initialize
-                    time.sleep(0.5)
-                    return True
+                    # API is up, now wait for config file with API key
+                    # This is crucial on first run when keys are being generated
+                    self._api_key = None  # Reset cached key
+                    if self.get_api_key():
+                        return True
+                    # Config not ready yet, keep waiting
                 time.sleep(0.5)
 
             return False
