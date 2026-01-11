@@ -15,6 +15,8 @@ class MessageType(Enum):
     CLEAR = "clear"
     FULL_SYNC = "full_sync"
     SYNC_REQUEST = "sync_request"
+    SYNCTHING_DEVICE_ID = "syncthing_device_id"
+    SYNCTHING_STATUS = "syncthing_status"
 
 
 @dataclass
@@ -232,6 +234,14 @@ class NetworkManager(QObject):
     def send_clear(self):
         """Send clear signal."""
         self._worker.send_message(Message(MessageType.CLEAR))
+
+    def send_syncthing_device_id(self, device_id: str):
+        """Send Syncthing device ID to peer."""
+        self._worker.send_message(Message(MessageType.SYNCTHING_DEVICE_ID, device_id))
+
+    def send_syncthing_status(self, status: str):
+        """Send Syncthing status to peer."""
+        self._worker.send_message(Message(MessageType.SYNCTHING_STATUS, status))
 
     def cleanup(self):
         """Clean shutdown."""

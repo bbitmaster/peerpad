@@ -13,12 +13,14 @@ from PyQt6.QtWidgets import (
     QSplitter,
     QFrame,
     QStatusBar,
+    QMessageBox,
 )
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QAction, QFont
 
 from .network import NetworkManager, Message, MessageType
 from .widgets import ConnectionDialog
+from .syncthing import SyncthingManager
 
 
 class PeerPadWindow(QMainWindow):
@@ -30,9 +32,12 @@ class PeerPadWindow(QMainWindow):
         self.setMinimumSize(600, 500)
 
         self._network = NetworkManager()
+        self._syncthing = SyncthingManager()
         self._is_connected = False
         self._is_host = False
         self._suppress_text_signal = False
+        self._peer_device_id: str = None
+        self._syncthing_ready = False
 
         self._setup_ui()
         self._setup_menu()
@@ -112,12 +117,15 @@ class PeerPadWindow(QMainWindow):
 
         self._connection_btn = QPushButton("Connect...")
         self._folder_btn = QPushButton("Shared Folder")
+        self._sync_status_label = QLabel("")
+        self._sync_status_label.setStyleSheet("color: gray; font-size: 11px;")
         # Create shared folder if it doesn't exist
         self._shared_folder = os.path.expanduser("~/PeerPad")
         os.makedirs(self._shared_folder, exist_ok=True)
 
         toolbar.addWidget(self._connection_btn)
         toolbar.addWidget(self._folder_btn)
+        toolbar.addWidget(self._sync_status_label)
         toolbar.addStretch()
 
         layout.addLayout(toolbar)
@@ -237,11 +245,17 @@ class PeerPadWindow(QMainWindow):
         if current:
             self._network.send_full_sync(current)
 
+        # Initiate Syncthing setup
+        QTimer.singleShot(100, self._setup_syncthing)
+
     def _on_client_connected(self, peer: str):
         self._update_status(f"Connected to {peer}")
 
     def _on_disconnected(self):
         self._is_connected = False
+        self._peer_device_id = None
+        self._syncthing_ready = False
+        self._sync_status_label.setText("")
         self._update_status("Disconnected")
         self._connection_btn.setText("Connect...")
         self._disconnect_action.setEnabled(False)
@@ -262,6 +276,10 @@ class PeerPadWindow(QMainWindow):
                 self._their_text.setPlainText(msg.content)
             elif msg.type == MessageType.CLEAR:
                 self._their_text.clear()
+            elif msg.type == MessageType.SYNCTHING_DEVICE_ID:
+                self._handle_peer_device_id(msg.content)
+            elif msg.type == MessageType.SYNCTHING_STATUS:
+                self._handle_peer_syncthing_status(msg.content)
         finally:
             self._suppress_text_signal = False
 
@@ -286,8 +304,129 @@ class PeerPadWindow(QMainWindow):
             self._network.send_clear()
 
     def _open_shared_folder(self):
-        # Open in file manager
-        subprocess.Popen(["xdg-open", self._shared_folder])
+        # Open in file manager - try dolphin first (KDE), then xdg-open
+        try:
+            if os.path.exists("/usr/bin/dolphin"):
+                subprocess.Popen(["dolphin", self._shared_folder])
+            else:
+                subprocess.Popen(["xdg-open", self._shared_folder])
+        except Exception as e:
+            print(f"Failed to open folder: {e}")
+
+    def _setup_syncthing(self):
+        """Set up Syncthing after connecting to peer."""
+        self._sync_status_label.setText("Setting up sync...")
+
+        # Check if Syncthing is installed
+        if not SyncthingManager.is_installed():
+            reply = QMessageBox.question(
+                self,
+                "Syncthing Not Installed",
+                "Syncthing is required for folder sync but is not installed.\n\n"
+                "Would you like to install it now?\n"
+                "(Text sharing will work without it)",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                self._install_syncthing()
+            else:
+                self._network.send_syncthing_status("not_installed")
+                self._sync_status_label.setText("Sync: Not available")
+                return
+
+        # Start Syncthing if not running
+        if not self._syncthing.is_running():
+            self._sync_status_label.setText("Starting Syncthing...")
+            if not self._syncthing.start():
+                self._sync_status_label.setText("Sync: Failed to start")
+                self._network.send_syncthing_status("error")
+                return
+
+        # Get and send our device ID
+        device_id = self._syncthing.get_device_id()
+        if device_id:
+            self._syncthing_ready = True
+            self._network.send_syncthing_device_id(device_id)
+            self._sync_status_label.setText("Sync: Exchanging IDs...")
+            # If we already have peer's ID, configure folder
+            if self._peer_device_id:
+                self._configure_shared_folder()
+        else:
+            self._sync_status_label.setText("Sync: Could not get device ID")
+            self._network.send_syncthing_status("error")
+
+    def _install_syncthing(self):
+        """Install Syncthing with user confirmation."""
+        cmd = SyncthingManager.get_install_command()
+        if not cmd:
+            QMessageBox.warning(
+                self,
+                "Installation Failed",
+                "Could not determine installation command for your distribution.\n"
+                "Please install Syncthing manually."
+            )
+            self._network.send_syncthing_status("not_installed")
+            self._sync_status_label.setText("Sync: Not available")
+            return
+
+        distro = SyncthingManager.get_distro()
+        cmd_str = " ".join(cmd)
+        reply = QMessageBox.question(
+            self,
+            "Install Syncthing",
+            f"This will run the following command:\n\n{cmd_str}\n\nProceed?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+
+        if reply == QMessageBox.StandardButton.Yes:
+            self._sync_status_label.setText("Installing Syncthing...")
+            success, message = SyncthingManager.install()
+            if success:
+                QMessageBox.information(self, "Installation Complete", message)
+                # Retry setup after installation
+                QTimer.singleShot(500, self._setup_syncthing)
+            else:
+                QMessageBox.warning(self, "Installation Failed", message)
+                self._network.send_syncthing_status("not_installed")
+                self._sync_status_label.setText("Sync: Not available")
+        else:
+            self._network.send_syncthing_status("not_installed")
+            self._sync_status_label.setText("Sync: Not available")
+
+    def _handle_peer_device_id(self, device_id: str):
+        """Handle receiving peer's Syncthing device ID."""
+        # Check if peer is on the same machine (same device ID)
+        my_device_id = self._syncthing.get_device_id()
+        if my_device_id and device_id == my_device_id:
+            self._sync_status_label.setText("Sync: Same machine")
+            self._sync_status_label.setStyleSheet("color: gray; font-size: 11px;")
+            return
+
+        self._peer_device_id = device_id
+        # If we're ready, configure the shared folder
+        if self._syncthing_ready:
+            self._configure_shared_folder()
+
+    def _handle_peer_syncthing_status(self, status: str):
+        """Handle peer's Syncthing status message."""
+        if status == "not_installed":
+            self._sync_status_label.setText("Sync: Peer doesn't have Syncthing")
+        elif status == "error":
+            self._sync_status_label.setText("Sync: Peer error")
+
+    def _configure_shared_folder(self):
+        """Configure the shared folder with the peer."""
+        if not self._peer_device_id or not self._syncthing_ready:
+            return
+
+        self._sync_status_label.setText("Configuring shared folder...")
+
+        if self._syncthing.setup_shared_folder(self._shared_folder, self._peer_device_id):
+            self._sync_status_label.setText("Sync: Active")
+            self._sync_status_label.setStyleSheet("color: green; font-size: 11px;")
+        else:
+            self._sync_status_label.setText("Sync: Config failed")
+            self._sync_status_label.setStyleSheet("color: orange; font-size: 11px;")
 
     def closeEvent(self, event):
         self._network.cleanup()

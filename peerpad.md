@@ -38,13 +38,14 @@ PeerPad provides:
   - Menu to disconnect, reconnect, switch modes
   - Shows connection status and peer IP
 
-### File Sharing (Planned)
-- App will manage a `~/PeerPad` folder that syncs between peers
+### File Sharing (Implemented)
+- App manages a `~/PeerPad` folder that syncs between peers
 - Syncthing integration:
-  1. Check if Syncthing is installed
-  2. Configure Syncthing automatically via REST API
-  3. Exchange device IDs over the text connection
-  4. Set up the shared folder
+  1. Detects if Syncthing is installed (offers to install if not)
+  2. Auto-starts Syncthing if not running
+  3. Exchanges device IDs over the text connection automatically
+  4. Configures the shared folder via REST API
+  5. Shows sync status in the UI
 
 ## Architecture
 
@@ -75,13 +76,15 @@ PeerPad provides:
     └─────────┘
 ```
 
-## Protocol (Text Sync)
+## Protocol
 
 Simple TCP with JSON messages (newline-delimited):
 ```json
-{"type": "full_sync", "content": "current text"}  // Full text replacement
-{"type": "text", "content": "a"}                  // Single keystroke (future)
-{"type": "clear", "content": ""}                  // Clear text box
+{"type": "full_sync", "content": "current text"}       // Full text replacement
+{"type": "text", "content": "a"}                       // Single keystroke (future)
+{"type": "clear", "content": ""}                       // Clear text box
+{"type": "syncthing_device_id", "content": "ABC123"}   // Syncthing device ID exchange
+{"type": "syncthing_status", "content": "not_installed"} // Syncthing status
 ```
 
 ## Project Structure
@@ -99,7 +102,8 @@ peerpad/
     ├── __main__.py      # Entry point, CLI parsing
     ├── app.py           # Main PyQt6 application
     ├── widgets.py       # Connection dialog
-    └── network.py       # TCP server/client, async handling
+    ├── network.py       # TCP server/client, async handling
+    └── syncthing.py     # Syncthing REST API integration
 ```
 
 ## Installation
@@ -148,11 +152,13 @@ pip install PyQt6  # In virtualenv
 - [x] Menu for disconnect/reconnect
 - [x] Error handling
 
-### Phase 3: Syncthing Integration (Planned)
-- [ ] Detect if Syncthing is installed
-- [ ] REST API wrapper to configure Syncthing
-- [ ] Device ID exchange over text connection
-- [ ] Shared folder setup automation
+### Phase 3: Syncthing Integration ✅
+- [x] Detect if Syncthing is installed
+- [x] REST API wrapper to configure Syncthing
+- [x] Device ID exchange over text connection
+- [x] Shared folder setup automation
+- [x] Auto-start Syncthing if not running
+- [x] Offer to install Syncthing if missing
 
 ### Phase 4: Polish (Future)
 - [ ] System tray option
