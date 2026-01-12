@@ -83,7 +83,7 @@ class SyncthingManager:
 
         try:
             self._process = subprocess.Popen(
-                ["syncthing", "serve", "--no-browser", "--no-default-folder"],
+                ["syncthing", "serve", "--no-browser"],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 start_new_session=True
